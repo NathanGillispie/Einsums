@@ -1,0 +1,142 @@
+name: Windows build and test workflow
+on:
+  workflow_call:
+    inputs:
+      build_ref:
+        type: string
+        required: false
+      build_configure_extra_args:
+        type: string
+        required: false
+
+permissions: read-all
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [ RelWithDebInfo ]
+
+    name: "clang-cl • openblas • ${{ matrix.build_type }}"
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.build_ref }}
+          path: src
+
+      # ---- Conda environment setup ----
+      - name: Setup Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: einsums-env
+          conda-remove-defaults: "true"
+
+      - name: Install ruamel.yaml
+        run: conda install -c conda-forge ruamel.yaml
+
+      - name: Merge Conda YAML files
+        working-directory: src/devtools/conda-envs
+        run: python merge_yml.py windows openblas
+
+      - name: Cache Conda env
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CONDA }}/envs
+          key: conda-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/devtools/conda-envs/conda.yml') }}
+        id: cache
+
+      - name: Update environment
+        run: conda env update -n einsums-env -f src/devtools/conda-envs/conda.yml
+        if: steps.cache.outputs.cache-hit != 'true'
+
+      - name: Conda Environment
+        run: |
+          conda info
+          conda list
+
+      # ---- MSVC environment (vcvars64) ----
+      # Exports LIB, INCLUDE, PATH, VCINSTALLDIR etc. to GITHUB_ENV for all subsequent steps.
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      # ---- Merge conda paths with MSVC vars ----
+      # Rationale: conda activation overwrites LIB/INCLUDE with only conda paths,
+      # losing Windows SDK and MSVC library paths (kernel32.lib, etc.).
+      # We prepend conda paths to the MSVC-set values so both are available.
+      # We also clear CXXFLAGS/CFLAGS — conda packages set flags that conflict
+      # with clang-cl (e.g. -std=c++17 vs cmake's -std=c++20).
+      - name: Merge conda paths with MSVC environment
+        shell: pwsh
+        run: |
+          # Ensure conda env is active
+          conda activate einsums-env
+
+          $condaLib = "$env:CONDA_PREFIX\Library"
+
+          # Prepend conda Library paths (preserving MSVC paths from ilammy/msvc-dev-cmd)
+          "LIB=$condaLib\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INCLUDE=$condaLib\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PATH=$condaLib\bin;$condaLib\mingw64\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # Set compilers to clang-cl from conda
+          "CC=$condaLib\bin\clang-cl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CXX=$condaLib\bin\clang-cl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          # Clear conda-set build flags that conflict with CMake
+          "CXXFLAGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CFLAGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CPPFLAGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # ---- Configure, Build, Test ----
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          conda activate einsums-env
+
+          # Re-assert compiler (conda activation may override env vars)
+          $env:CC  = "$env:CONDA_PREFIX\Library\bin\clang-cl.exe"
+          $env:CXX = "$env:CONDA_PREFIX\Library\bin\clang-cl.exe"
+
+          # Clear conda-set flags that conflict with CMake (/std:c++17 vs /std:c++20)
+          $env:CXXFLAGS = ""
+          $env:CFLAGS   = ""
+          $env:CPPFLAGS = ""
+
+          cmake `
+            -G Ninja `
+            -S "$env:GITHUB_WORKSPACE\src" `
+            -B "$env:GITHUB_WORKSPACE\build" `
+            -D CMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            -D CMAKE_C_COMPILER="$env:CC" `
+            -D CMAKE_CXX_COMPILER="$env:CXX" `
+            -D CMAKE_PREFIX_PATH="$env:CONDA_PREFIX\Library" `
+            -D EINSUMS_BUILD_PYTHON=OFF `
+            -D EINSUMS_WITH_TESTS=ON `
+            -D EINSUMS_WITH_EXAMPLES=ON `
+            -D EINSUMS_WITH_BACKTRACES=OFF `
+            -D EINSUMS_SHOW_WARNING=OFF `
+            -D CMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\installed" `
+            ${{ inputs.build_configure_extra_args }}
+
+      - name: Build
+        shell: pwsh
+        run: |
+          conda activate einsums-env
+          cmake --build "$env:GITHUB_WORKSPACE\build" --config ${{ matrix.build_type }}
+
+      - name: Test (CTest)
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/build
+        run: |
+          # DLL search path: Einsums, spdlog, and conda libraries must be on PATH.
+          $env:PATH = "$env:GITHUB_WORKSPACE\build\${{ matrix.build_type }}\bin;$env:GITHUB_WORKSPACE\build\_deps\spdlog-build;$env:CONDA_PREFIX\Library\bin;$env:CONDA_PREFIX\Library\mingw64\bin;$env:PATH"
+          ctest -j4 --output-on-failure
