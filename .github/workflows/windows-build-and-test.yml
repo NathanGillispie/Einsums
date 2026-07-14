@@ -61,40 +61,40 @@ jobs:
           conda info
           conda list
 
-      # ---- MSVC environment (vcvars64) ----
-      # Exports LIB, INCLUDE, PATH, VCINSTALLDIR etc. to GITHUB_ENV for all subsequent steps.
-      - name: Setup MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: amd64
-
-      # ---- Merge conda paths with MSVC vars ----
-      # Rationale: conda activation overwrites LIB/INCLUDE with only conda paths,
-      # losing Windows SDK and MSVC library paths (kernel32.lib, etc.).
-      # We prepend conda paths to the MSVC-set values so both are available.
-      # We also clear CXXFLAGS/CFLAGS — conda packages set flags that conflict
-      # with clang-cl (e.g. -std=c++17 vs cmake's -std=c++20).
-      - name: Merge conda paths with MSVC environment
-        shell: pwsh
+      # ---- MSVC + Conda environment ----
+      # Manual vcvars64.bat call replaces ilammy/msvc-dev-cmd@v1 which is buggy
+      # on windows-2022 (garbles GITHUB_WORKSPACE and other env vars as VS
+      # extension script paths). Same approach as build_windows.bat.
+      - name: Setup MSVC and merge conda environment
+        shell: cmd
         run: |
-          # Ensure conda env is active
-          conda activate einsums-env
+          @echo on
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" > nul 2>&1
+          if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
-          $condaLib = "$env:CONDA_PREFIX\Library"
+          call conda activate einsums-env
 
-          # Prepend conda Library paths (preserving MSVC paths from ilammy/msvc-dev-cmd)
-          "LIB=$condaLib\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "INCLUDE=$condaLib\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "PATH=$condaLib\bin;$condaLib\mingw64\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          set "LIB=%CONDA_PREFIX%\Library\lib;%LIB%"
+          set "INCLUDE=%CONDA_PREFIX%\Library\include;%INCLUDE%"
+          set "PATH=%CONDA_PREFIX%\Library\bin;%CONDA_PREFIX%\Library\mingw64\bin;%PATH%"
 
-          # Set compilers to clang-cl from conda
-          "CC=$condaLib\bin\clang-cl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CXX=$condaLib\bin\clang-cl.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          set "CC=%CONDA_PREFIX%\Library\bin\clang-cl.exe"
+          set "CXX=%CONDA_PREFIX%\Library\bin\clang-cl.exe"
 
-          # Clear conda-set build flags that conflict with CMake
-          "CXXFLAGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CFLAGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "CPPFLAGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          set "CXXFLAGS="
+          set "CFLAGS="
+          set "CPPFLAGS="
+
+          echo LIB=%LIB%>> %GITHUB_ENV%
+          echo INCLUDE=%INCLUDE%>> %GITHUB_ENV%
+          echo PATH=%PATH%>> %GITHUB_ENV%
+          echo CC=%CC%>> %GITHUB_ENV%
+          echo CXX=%CXX%>> %GITHUB_ENV%
+          echo CXXFLAGS=>> %GITHUB_ENV%
+          echo CFLAGS=>> %GITHUB_ENV%
+          echo CPPFLAGS=>> %GITHUB_ENV%
+
+          echo --- Environment set up ---
 
       # ---- Configure, Build, Test ----
       - name: Configure CMake
