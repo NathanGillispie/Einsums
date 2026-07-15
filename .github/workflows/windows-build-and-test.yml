@@ -61,82 +61,55 @@ jobs:
           conda info
           conda list
 
-      # ---- MSVC + Conda environment ----
-      # Manual vcvars64.bat call replaces ilammy/msvc-dev-cmd@v1 which is buggy
-      # on windows-2022 (garbles GITHUB_WORKSPACE and other env vars as VS
-      # extension script paths). Same approach as build_windows.bat.
-      - name: Setup MSVC and merge conda environment
+      # ---- Configure, Build, Test ----
+      # vs2022_compiler_vars.bat calls vcvars; no separate vcvars / GITHUB_ENV merge.
+      # pwsh activate skips this scripts and would set clang/clang++ instead of clang-cl.
+      - name: Configure CMake
         shell: cmd
         run: |
-          @echo on
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" > nul 2>&1
-          if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
-
           call conda activate einsums-env
+          if errorlevel 1 exit /b %ERRORLEVEL%
 
-          set "LIB=%CONDA_PREFIX%\Library\lib;%LIB%"
-          set "INCLUDE=%CONDA_PREFIX%\Library\include;%INCLUDE%"
-          set "PATH=%CONDA_PREFIX%\Library\bin;%CONDA_PREFIX%\Library\mingw64\bin;%PATH%"
-
-          set "CC=%CONDA_PREFIX%\Library\bin\clang-cl.exe"
-          set "CXX=%CONDA_PREFIX%\Library\bin\clang-cl.exe"
-
+          rem Clear feedstock flags (/std:c++17, /O2, -DNDEBUG, ...) for CMake
           set "CXXFLAGS="
           set "CFLAGS="
           set "CPPFLAGS="
+          rem vs2022_compiler_vars sets these for VS; Ninja rejects any -A/-T
+          rem (including empty). Must unset here — preset env cannot clear them.
+          set "CMAKE_GENERATOR_PLATFORM="
+          set "CMAKE_GENERATOR_TOOLSET="
+          set "CMAKE_GENERATOR="
+          set "CC=%CONDA_PREFIX%\Library\bin\clang-cl.exe"
+          set "CXX=%CONDA_PREFIX%\Library\bin\clang-cl.exe"
 
-          echo LIB=%LIB%>> %GITHUB_ENV%
-          echo INCLUDE=%INCLUDE%>> %GITHUB_ENV%
-          echo PATH=%PATH%>> %GITHUB_ENV%
-          echo CC=%CC%>> %GITHUB_ENV%
-          echo CXX=%CXX%>> %GITHUB_ENV%
-          echo CXXFLAGS=>> %GITHUB_ENV%
-          echo CFLAGS=>> %GITHUB_ENV%
-          echo CPPFLAGS=>> %GITHUB_ENV%
-
-          echo --- Environment set up ---
-
-      # ---- Configure, Build, Test ----
-      - name: Configure CMake
-        shell: pwsh
-        run: |
-          conda activate einsums-env
-
-          # Re-assert compiler (conda activation may override env vars)
-          $env:CC  = "$env:CONDA_PREFIX\Library\bin\clang-cl.exe"
-          $env:CXX = "$env:CONDA_PREFIX\Library\bin\clang-cl.exe"
-
-          # Clear conda-set flags that conflict with CMake (/std:c++17 vs /std:c++20)
-          $env:CXXFLAGS = ""
-          $env:CFLAGS   = ""
-          $env:CPPFLAGS = ""
-
-          cmake `
-            -G Ninja `
-            -S "$env:GITHUB_WORKSPACE\src" `
-            -B "$env:GITHUB_WORKSPACE\build" `
-            -D CMAKE_BUILD_TYPE=${{ matrix.build_type }} `
-            -D CMAKE_C_COMPILER="$env:CC" `
-            -D CMAKE_CXX_COMPILER="$env:CXX" `
-            -D CMAKE_PREFIX_PATH="$env:CONDA_PREFIX\Library" `
-            -D EINSUMS_BUILD_PYTHON=OFF `
-            -D EINSUMS_WITH_TESTS=ON `
-            -D EINSUMS_WITH_EXAMPLES=ON `
-            -D EINSUMS_WITH_BACKTRACES=OFF `
-            -D EINSUMS_SHOW_WARNING=OFF `
-            -D CMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\installed" `
+          cmake -G Ninja ^
+            -S "%GITHUB_WORKSPACE%\src" ^
+            -B "%GITHUB_WORKSPACE%\build" ^
+            -D CMAKE_BUILD_TYPE=${{ matrix.build_type }} ^
+            -D CMAKE_C_COMPILER="%CC%" ^
+            -D CMAKE_CXX_COMPILER="%CXX%" ^
+            -D CMAKE_PREFIX_PATH="%CONDA_PREFIX%\Library" ^
+            -D EINSUMS_BUILD_PYTHON=OFF ^
+            -D EINSUMS_WITH_TESTS=ON ^
+            -D EINSUMS_WITH_EXAMPLES=ON ^
+            -D EINSUMS_WITH_BACKTRACES=OFF ^
+            -D EINSUMS_SHOW_WARNING=OFF ^
+            -D CMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\installed" ^
             ${{ inputs.build_configure_extra_args }}
 
       - name: Build
-        shell: pwsh
+        shell: cmd
         run: |
-          conda activate einsums-env
-          cmake --build "$env:GITHUB_WORKSPACE\build" --config ${{ matrix.build_type }}
+          call conda activate einsums-env
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          cmake --build "%GITHUB_WORKSPACE%\build" --config ${{ matrix.build_type }}
 
       - name: Test (CTest)
-        shell: pwsh
+        shell: cmd
         working-directory: ${{ github.workspace }}/build
         run: |
-          # DLL search path: Einsums, spdlog, and conda libraries must be on PATH.
-          $env:PATH = "$env:GITHUB_WORKSPACE\build\${{ matrix.build_type }}\bin;$env:GITHUB_WORKSPACE\build\_deps\spdlog-build;$env:CONDA_PREFIX\Library\bin;$env:CONDA_PREFIX\Library\mingw64\bin;$env:PATH"
+          call conda activate einsums-env
+          if errorlevel 1 exit /b %ERRORLEVEL%
+          rem DLL search path: Einsums, spdlog, conda, mingw64 runtime
+          set "PATH=%GITHUB_WORKSPACE%\build\${{ matrix.build_type }}\bin;%GITHUB_WORKSPACE%\build\_deps\spdlog-build;%CONDA_PREFIX%\Library\bin;%CONDA_PREFIX%\Library\mingw64\bin;%PATH%"
           ctest -j4 --output-on-failure
