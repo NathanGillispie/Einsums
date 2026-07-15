@@ -211,7 +211,7 @@ void permute(U const UC_prefactor, std::tuple<CIndices...> const &C_indices, CTy
 
         EINSUMS_OMP_PARALLEL_FOR
         for (size_t i = 0; i < elements; i++) {
-            thread_local std::array<int64_t, CRank> index;
+            std::array<int64_t, CRank> index;
 
             sentinel_to_indices(i, index_strides, index);
 
