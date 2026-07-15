@@ -183,9 +183,16 @@ endif()
 einsums_check_for_dot_subroutine(DEFINITIONS EINSUMS_DOT_SUBROUTINE LIBRARIES ${_einsums_dot_check_libs})
 
 if(EINSUMS_DOT_SUBROUTINE)
-message("-- Complex dot products are subroutines. Choosing appropriate code path.")
+  message("-- Complex dot products are subroutines. Choosing appropriate code path.")
 else()
-message("-- Complex dot products are not subroutines. Choosing appropriate code path.")
+  einsums_check_for_dot_struct_return(
+    DEFINITIONS EINSUMS_DOT_STRUCT_RETURN LIBRARIES ${_einsums_dot_check_libs}
+  )
+  if(EINSUMS_DOT_STRUCT_RETURN)
+    message("-- Complex dot products return structs. Choosing appropriate code path.")
+  else()
+    message("-- Complex dot products return std::complex. Choosing appropriate code path.")
+  endif()
 endif()
 
 include(FindPackageHandleStandardArgs)
