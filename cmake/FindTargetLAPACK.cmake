@@ -173,7 +173,14 @@ if((TARGET tgt::blas) AND (TARGET tgt::lapk))
   set(${PN}_MESSAGE "Found LAPACK ${_ven}w/${_int}: ${_illl};${_illb}")
 endif()
 
-einsums_check_for_dot_subroutine(DEFINITIONS EINSUMS_DOT_SUBROUTINE LIBRARIES tgt::lapack m)
+# libm is not available on MSVC/clang-cl Windows toolchains.
+if(WIN32)
+  set(_einsums_dot_check_libs tgt::lapack)
+else()
+  set(_einsums_dot_check_libs tgt::lapack m)
+endif()
+
+einsums_check_for_dot_subroutine(DEFINITIONS EINSUMS_DOT_SUBROUTINE LIBRARIES ${_einsums_dot_check_libs})
 
 if(EINSUMS_DOT_SUBROUTINE)
 message("-- Complex dot products are subroutines. Choosing appropriate code path.")

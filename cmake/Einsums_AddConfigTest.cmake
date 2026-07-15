@@ -447,9 +447,9 @@ endfunction()
 
 function(einsums_check_for_dot_subroutine)
   if(_int STREQUAL ilp64)
-  	set(__int_interface_macro EINSUMS_BLAS_INTERFACE_ILP64)
+    set(__int_interface_macro EINSUMS_BLAS_INTERFACE_ILP64)
   elseif(_int STREQUAL lp64)
-  	set(__int_interface_macro EINSUMS_BLAS_INTERFACE_ILP64)
+    set(__int_interface_macro EINSUMS_BLAS_INTERFACE_LP64)
   endif()
 
   if(DEFINED FC_SYMBOL)
